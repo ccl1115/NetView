@@ -2,8 +2,8 @@ package com.bytedance.android.netview.library;
 
 import android.content.Context;
 import android.util.AttributeSet;
-import android.util.Xml;
 import android.view.InflateException;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
@@ -11,29 +11,54 @@ import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 import org.xmlpull.v1.XmlPullParserFactory;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.lang.reflect.Constructor;
 import java.nio.charset.Charset;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * @author yulu
  */
-class PlainXmlLayoutInflater {
+public class PlainXmlLayoutInflater {
 
     private static final String TAG_MERGE = "merge";
 
-    private XmlPullParser mXmlPullParser;
+    private XmlPullParserFactory mXmlPullParserFactory;
     private Context mContext;
 
     private final Object[] mConstructorArgs = new Object[2];
 
-    protected PlainXmlLayoutInflater(Context context) {
-        mContext = context;
+    static final Class<?>[] mConstructorSignature = new Class[]{
+            Context.class, AttributeSet.class};
+
+    private static final HashMap<String, Constructor<? extends View>> sConstructorMap =
+            new HashMap<>();
+
+    private LayoutInflater.Filter mFilter = new LayoutInflater.Filter() {
+        private InflaterAllowedList mInflaterAllowedList = new InflaterAllowedList();
+
+        @Override
+        public boolean onLoadClass(Class clazz) {
+            return mInflaterAllowedList.allowed(clazz.getName());
+        }
+    };
+
+
+    private Map<String, Boolean> mFilterMap = new HashMap<>();
+    private String[] sClassPrefixList = new String[]{
+            "android.view.",
+            "android.widget.",
+            "android.widget."
+    };
+
+    public PlainXmlLayoutInflater(Context context) {
+        mContext = context.getApplicationContext();
         try {
-            mXmlPullParser = XmlPullParserFactory.newInstance().newPullParser();
+            mXmlPullParserFactory = XmlPullParserFactory.newInstance();
         } catch (XmlPullParserException ignored) {
 
         }
@@ -56,37 +81,39 @@ class PlainXmlLayoutInflater {
                 }
             }
         }
-
     }
 
     private View inflate(Reader reader, ViewGroup root, boolean attachToRoot) {
         synchronized (mConstructorArgs) {
             final Context inflaterContext = mContext;
+            XmlPullParser xmlParser;
+            try {
+                xmlParser = new SlowParser(mContext.getResources(), mXmlPullParserFactory.newPullParser());
+            } catch (XmlPullParserException e) {
+                InflateException inflateException = new InflateException(e.getMessage());
+                inflateException.initCause(e);
+                throw inflateException;
+            }
             Context lastContext = (Context) mConstructorArgs[0];
-            AttributeSet attrs = Xml.asAttributeSet(mXmlPullParser);
+            AttributeSet attrs = (AttributeSet) xmlParser;
             mConstructorArgs[0] = inflaterContext;
             View result = root;
 
-            if (mXmlPullParser == null) {
-                return null;
-            }
-
             try {
-                XmlPullParser parser = mXmlPullParser;
-                parser.setInput(reader);
                 int type;
+                xmlParser.setInput(reader);
 
-                while ((type = parser.next()) != XmlPullParser.START_TAG &&
+                while ((type = xmlParser.next()) != XmlPullParser.START_TAG &&
                         type != XmlPullParser.END_DOCUMENT) {
                     // Empty
                 }
 
                 if (type != XmlPullParser.START_TAG) {
-                    throw new InflateException(parser.getPositionDescription()
+                    throw new InflateException(xmlParser.getPositionDescription()
                             + ": No start tag found!");
                 }
 
-                final String name = parser.getName();
+                final String name = xmlParser.getName();
 
                 if (TAG_MERGE.equals(name)) {
                     if (root == null || !attachToRoot) {
@@ -94,7 +121,7 @@ class PlainXmlLayoutInflater {
                                 + "ViewGroup root and attachToRoot=true");
                     }
 
-                    rInflate(parser, root, inflaterContext, attrs, false);
+                    rInflate(xmlParser, root, inflaterContext, attrs);
                 } else {
                     // Temp is the root view that was found in the xml
                     final View temp = createViewFromTag(root, name, inflaterContext, attrs);
@@ -113,7 +140,7 @@ class PlainXmlLayoutInflater {
 
 
                     // Inflate all children under temp against its context.
-                    rInflateChildren(parser, temp, attrs, true);
+                    rInflateChildren(xmlParser, temp, attrs);
 
 
                     // We are supposed to attach all the views we found (int temp)
@@ -135,7 +162,7 @@ class PlainXmlLayoutInflater {
                 throw inflateException;
             } catch (Exception e) {
                 InflateException inflateException =
-                        new InflateException(mXmlPullParser.getPositionDescription()
+                        new InflateException(xmlParser.getPositionDescription()
                                 + ": " + e.getMessage());
                 inflateException.initCause(e);
                 throw inflateException;
@@ -148,8 +175,40 @@ class PlainXmlLayoutInflater {
         }
     }
 
-    private void rInflateChildren(XmlPullParser parser, View temp, AttributeSet attrs, boolean attach) {
+    private void rInflateChildren(XmlPullParser parser, View parent, AttributeSet attrs)
+            throws IOException, XmlPullParserException {
+        rInflate(parser, parent, parent.getContext(), attrs);
+    }
 
+    private void rInflate(XmlPullParser parser, View parent, Context context, AttributeSet attrs)
+            throws IOException, XmlPullParserException {
+
+        final int depth = parser.getDepth();
+        int type;
+
+        while (((type = parser.next()) != XmlPullParser.END_TAG ||
+                parser.getDepth() > depth) && type != XmlPullParser.END_DOCUMENT) {
+
+            if (type != XmlPullParser.START_TAG) {
+                continue;
+            }
+
+            final String name = parser.getName();
+
+            if (TAG_MERGE.equals(name)) {
+                throw new InflateException("<merge /> must be the root element");
+            } else {
+                final View view = createViewFromTag(parent, name, context, attrs);
+                final ViewGroup viewGroup = (ViewGroup) parent;
+                final ViewGroup.LayoutParams params = viewGroup.generateLayoutParams(attrs);
+                rInflateChildren(parser, view, attrs);
+                viewGroup.addView(view, params);
+            }
+        }
+
+        //if (finishInflate) {
+        //    parent.onFinishInflate();
+        //}
     }
 
     private View createViewFromTag(View parent, String name, Context context, AttributeSet attrs) {
@@ -184,15 +243,109 @@ class PlainXmlLayoutInflater {
         }
     }
 
-    private View createView(String name, String prefix, AttributeSet attrs) {
+    protected View onCreateView(String name, AttributeSet attrs)
+            throws ClassNotFoundException {
+        for (String prefix : sClassPrefixList) {
+            try {
+                return createView(name, prefix, attrs);
+            } catch (ClassNotFoundException e) {
+                // In this case we want to let the base class take a crack
+                // at it.
+            }
+        }
         return null;
     }
 
-    private View onCreateView(View parent, String name, AttributeSet attrs) {
-        return null;
+    /**
+     * Version of {@link #onCreateView(String, AttributeSet)} that also
+     * takes the future parent of the view being constructed.  The default
+     * implementation simply calls {@link #onCreateView(String, AttributeSet)}.
+     *
+     * @param parent The future parent of the returned view.  <em>Note that
+     *               this may be null.</em>
+     * @param name   The fully qualified class name of the View to be create.
+     * @param attrs  An AttributeSet of attributes to apply to the View.
+     * @return View The View created.
+     */
+    protected View onCreateView(View parent, String name, AttributeSet attrs)
+            throws ClassNotFoundException {
+        return onCreateView(name, attrs);
     }
 
-    private void rInflate(XmlPullParser parser, View root, Context context, AttributeSet attrs, boolean attach) {
+    private View createView(String name, String prefix, AttributeSet attrs) throws ClassNotFoundException {
+        Constructor<? extends View> constructor = sConstructorMap.get(name);
+        Class<? extends View> clazz = null;
+
+        try {
+
+            if (constructor == null) {
+                // Class not found in the cache, see if it's real, and try to add it
+                clazz = Class.forName(
+                        prefix != null ? (prefix + name) : name).asSubclass(View.class);
+
+                if (mFilter != null) {
+                    boolean allowed = mFilter.onLoadClass(clazz);
+                    if (!allowed) {
+                        failNotAllowed(name, prefix, attrs);
+                    }
+                }
+                constructor = clazz.getConstructor(mConstructorSignature);
+                constructor.setAccessible(true);
+                sConstructorMap.put(name, constructor);
+            } else {
+                // If we have a filter, apply it to cached constructor
+                if (mFilter != null) {
+                    // Have we seen this name before?
+                    Boolean allowedState = mFilterMap.get(name);
+                    if (allowedState == null) {
+                        // New class -- remember whether it is allowed
+                        clazz = mContext.getClassLoader().loadClass(
+                                prefix != null ? (prefix + name) : name).asSubclass(View.class);
+
+                        boolean allowed = mFilter.onLoadClass(clazz);
+                        mFilterMap.put(name, allowed);
+                        if (!allowed) {
+                            failNotAllowed(name, prefix, attrs);
+                        }
+                    } else if (allowedState.equals(Boolean.FALSE)) {
+                        failNotAllowed(name, prefix, attrs);
+                    }
+                }
+            }
+
+            Object[] args = mConstructorArgs;
+            args[1] = attrs;
+
+            return constructor.newInstance(args);
+
+        } catch (NoSuchMethodException e) {
+            InflateException ie = new InflateException(attrs.getPositionDescription()
+                    + ": Error inflating class "
+                    + (prefix != null ? (prefix + name) : name));
+            ie.initCause(e);
+            throw ie;
+
+        } catch (ClassCastException e) {
+            // If loaded class is not a View subclass
+            InflateException ie = new InflateException(attrs.getPositionDescription()
+                    + ": Class is not a View "
+                    + (prefix != null ? (prefix + name) : name));
+            ie.initCause(e);
+            throw ie;
+        } catch (ClassNotFoundException e) {
+            // If loadClass fails, we should propagate the exception.
+            throw e;
+        } catch (Exception e) {
+            InflateException ie = new InflateException(attrs.getPositionDescription()
+                    + ": Error inflating class "
+                    + (clazz == null ? "<unknown>" : clazz.getName()));
+            ie.initCause(e);
+            throw ie;
+        }
+    }
+
+    private void failNotAllowed(String name, String prefix, AttributeSet attrs) {
 
     }
+
 }
