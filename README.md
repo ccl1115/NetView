@@ -7,3 +7,6 @@ Inflate plain Android Layout file(XML) in a slow way, just slow than Android pro
 
 * Extendable, you can write your own custom view inflation.
 
+## Note
+
+Under heavy development
