@@ -30,10 +30,9 @@ public class PlainXmlLayoutInflater {
     private XmlPullParserFactory mXmlPullParserFactory;
     private Context mContext;
 
-    private final Object[] mConstructorArgs = new Object[2];
+    private final Object[] mConstructorArgs = new Object[1];
 
-    static final Class<?>[] mConstructorSignature = new Class[]{
-            Context.class, AttributeSet.class};
+    static final Class<?>[] mConstructorSignature = new Class[]{Context.class};
 
     private static final HashMap<String, Constructor<? extends View>> sConstructorMap =
             new HashMap<>();
@@ -169,7 +168,6 @@ public class PlainXmlLayoutInflater {
             } finally {
                 // Don't retain static reference on context.
                 mConstructorArgs[0] = lastContext;
-                mConstructorArgs[1] = null;
             }
             return result;
         }
@@ -200,7 +198,7 @@ public class PlainXmlLayoutInflater {
             } else {
                 final View view = createViewFromTag(parent, name, context, attrs);
                 final ViewGroup viewGroup = (ViewGroup) parent;
-                final ViewGroup.LayoutParams params = viewGroup.generateLayoutParams(attrs);
+                final ViewGroup.LayoutParams params = LayoutParamsGenerator.Dispatch.generate(parent.getClass().getName(), attrs);
                 rInflateChildren(parser, view, attrs);
                 viewGroup.addView(view, params);
             }
@@ -314,7 +312,6 @@ public class PlainXmlLayoutInflater {
             }
 
             Object[] args = mConstructorArgs;
-            args[1] = attrs;
 
             return constructor.newInstance(args);
 

@@ -3,6 +3,7 @@ package com.bytedance.android.netview;
 import android.app.Activity;
 import android.os.Bundle;
 import android.view.View;
+import android.widget.FrameLayout;
 import android.widget.RelativeLayout;
 
 import com.bytedance.android.netview.library.PlainXmlLayoutInflater;
@@ -31,6 +32,6 @@ public class PlainXmlLayoutInflaterSampleActivity extends Activity {
         setContentView(R.layout.activity_plain_xml_layout_inflater_sample);
 
         View view = inflater.inflate(new StringBufferInputStream(mFixture), null);
-        ((RelativeLayout) findViewById(android.R.id.content)).addView(view);
+        ((FrameLayout) findViewById(android.R.id.content)).addView(view);
     }
 }
